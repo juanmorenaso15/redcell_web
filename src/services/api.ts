@@ -93,11 +93,12 @@ export const api = {
     return handleResponse<Poliza[]>(res);
   },
 
-  subirPdf: async (file: File): Promise<{ message: string }> => {
+subirPdf: async (file: File): Promise<{ message: string }> => {
     const formData = new FormData();
     formData.append('file', file);
     const res = await fetch(`${API_URL}/api/polizas/upload`, {
       method: 'POST',
+      headers: getHeaders(false),
       body: formData,
     });
     return handleResponse<{ message: string }>(res);
