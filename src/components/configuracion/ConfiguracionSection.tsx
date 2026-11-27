@@ -298,8 +298,8 @@ export function ConfiguracionSection({
               Solicita un código OTP de 6 dígitos a tu correo registrado y define una nueva contraseña segura.
             </p>
 
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="flex-1" style={{ minWidth: '220px' }}>
+            <div className="space-y-3">
+              <div className="w-full">
                 <label className="block text-xs font-semibold mb-1">Correo para código OTP</label>
                 <input
                   type="email"
@@ -312,16 +312,18 @@ export function ConfiguracionSection({
                 />
               </div>
 
-              <button
-                type="button"
-                disabled={enviandoOtp}
-                onClick={handleSolicitarOtpCambio}
-                style={inputBaseStyle}
-                className="inline-flex items-center gap-1.5 px-4 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] hover:bg-[#F1F5F9] text-xs font-semibold text-[#0F172A] cursor-pointer disabled:opacity-60 shrink-0"
-              >
-                <Mail size={14} />
-                {enviandoOtp ? 'Enviando...' : otpEnviado ? 'Reenviar código OTP' : 'Enviar código OTP'}
-              </button>
+              <div className="flex items-center justify-start">
+                <button
+                  type="button"
+                  disabled={enviandoOtp}
+                  onClick={handleSolicitarOtpCambio}
+                  style={inputBaseStyle}
+                  className="inline-flex items-center justify-center gap-1.5 px-4 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] hover:bg-[#F1F5F9] text-xs font-semibold text-[#0F172A] cursor-pointer disabled:opacity-60 whitespace-nowrap"
+                >
+                  <Mail size={14} />
+                  {enviandoOtp ? 'Enviando...' : otpEnviado ? 'Reenviar código OTP' : 'Enviar código OTP'}
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-[#E2E8F0]">
