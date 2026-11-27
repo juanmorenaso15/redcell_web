@@ -44,8 +44,14 @@ interface DashboardPageProps {
   onUnauthorized: () => void;
 }
 
+const PAGE_SIZE = 10;
+
 export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
   const [polizas, setPolizas] = useState<Poliza[]>([]);
+  const [page, setPage] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [totalElements, setTotalElements] = useState(0);
+
   const [alertas, setAlertas] = useState<AlertaRecordatorio[]>([]);
   const [tarifas, setTarifas] = useState<ConfiguracionTarifa[]>([]);
   const [perfil, setPerfil] = useState<PerfilUsuario | null>(null);
@@ -82,53 +88,96 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
     return () => window.removeEventListener('resize', actualizarViewport);
   }, []);
 
-  const cargarDatos = useCallback(async () => {
-    setLoading(true);
+  const cargarPolizasPaginadas = useCallback(
+    async (targetPage = page) => {
+      setLoading(true);
+      try {
+        const pageData = await api.listarPolizasPaginadas({
+          page: targetPage,
+          size: PAGE_SIZE,
+          q: search,
+          aseguradora: aseguradoraFilter,
+          tipoVehiculo: tipoVehiculoFilter,
+          vigencia: vigenciaFilter,
+          soloActivas: true,
+          sortBy: 'id',
+          sortDir: 'desc',
+        });
+
+        if (Array.isArray(pageData)) {
+          setPolizas(pageData);
+          setPage(0);
+          setTotalPages(pageData.length > 0 ? 1 : 0);
+          setTotalElements(pageData.length);
+        } else {
+          const content = Array.isArray(pageData?.content) ? pageData.content : [];
+          setPolizas(content);
+          setPage(typeof pageData?.number === 'number' ? pageData.number : 0);
+          setTotalPages(typeof pageData?.totalPages === 'number' ? pageData.totalPages : 0);
+          setTotalElements(typeof pageData?.totalElements === 'number' ? pageData.totalElements : content.length);
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Error cargando pólizas';
+        if (msg.includes('401') || msg.includes('403') || msg.toLowerCase().includes('token')) {
+          onUnauthorized();
+        } else {
+          setFeedback(msg);
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    [page, search, aseguradoraFilter, tipoVehiculoFilter, vigenciaFilter, onUnauthorized]
+  );
+
+  const cargarDatosComplementarios = useCallback(async () => {
     setLoadingPerfil(true);
     try {
-      const [listaPolizas, listaAlertas, listaTarifas, perfilUsuario] = await Promise.all([
-        api.listarPolizas(),
+      const [listaAlertas, listaTarifas, perfilUsuario] = await Promise.all([
         api.obtenerAlertas().catch(() => []),
         api.listarTarifas().catch(() => []),
         api.obtenerPerfil().catch(() => null),
       ]);
-      setPolizas(listaPolizas);
-      setAlertas(listaAlertas);
-      setTarifas(listaTarifas);
+      setAlertas(Array.isArray(listaAlertas) ? listaAlertas : []);
+      setTarifas(Array.isArray(listaTarifas) ? listaTarifas : []);
       if (perfilUsuario) {
         setPerfil(perfilUsuario);
         setSesionTick((t) => t + 1);
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Error cargando datos';
-      if (msg.includes('401') || msg.includes('403') || msg.toLowerCase().includes('token')) {
-        onUnauthorized();
-      } else {
-        setFeedback(msg);
-      }
     } finally {
-      setLoading(false);
       setLoadingPerfil(false);
     }
-  }, [onUnauthorized]);
+  }, []);
+
+  const cargarDatos = useCallback(async () => {
+    await Promise.all([cargarPolizasPaginadas(page), cargarDatosComplementarios()]);
+  }, [cargarPolizasPaginadas, cargarDatosComplementarios, page]);
 
   useEffect(() => {
-    cargarDatos();
-  }, [cargarDatos]);
+    cargarPolizasPaginadas(page);
+  }, [cargarPolizasPaginadas, page]);
 
-  const tarifaActiva = useMemo(() => tarifas.find((t) => Boolean(t.activo)), [tarifas]);
+  useEffect(() => {
+    cargarDatosComplementarios();
+  }, [cargarDatosComplementarios]);
+
+  const tarifaActiva = useMemo(
+    () => (Array.isArray(tarifas) ? tarifas.find((t) => Boolean(t.activo)) : undefined),
+    [tarifas]
+  );
 
   const alertasVisibles = useMemo(
     () =>
       soloPendientesWhatsapp
-        ? alertas.filter((a) => !a.enviadoWhatsapp)
-        : alertas,
+        ? (Array.isArray(alertas) ? alertas : []).filter((a) => !a.enviadoWhatsapp)
+        : (Array.isArray(alertas) ? alertas : []),
     [alertas, soloPendientesWhatsapp]
   );
 
   const handleUploadPdf = async (file: File) => {
     const res = await api.subirPdf(file);
     await alertasSwal.exito('PDF procesado', res.message || 'Póliza cargada correctamente.');
+    setPage(0);
     await cargarDatos();
   };
 
@@ -153,6 +202,8 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
     try {
       await api.eliminarPoliza(poliza.id);
       await alertasSwal.exito('Póliza eliminada', `Se eliminó la póliza ${poliza.placa}.`);
+      const nextPage = polizas.length === 1 && page > 0 ? page - 1 : page;
+      setPage(nextPage);
       await cargarDatos();
     } catch (err: unknown) {
       await alertasSwal.error(
@@ -241,9 +292,10 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
   };
 
   const handleApplyTarifaToPolizas = async (valor: number, soloSinTarifa: boolean) => {
+    const lista = Array.isArray(polizas) ? polizas : [];
     const objetivos = soloSinTarifa
-      ? polizas.filter((p) => Number(p.usoPlataforma || 0) === 0)
-      : polizas;
+      ? lista.filter((p) => Number(p.usoPlataforma || 0) === 0)
+      : lista;
 
     if (objetivos.length === 0) {
       await alertasSwal.advertencia(
@@ -283,63 +335,68 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
   };
 
   const aseguradoras = useMemo(() => {
-    const set = new Set<string>();
-    polizas.forEach((p) => {
+    const set = new Set<string>(['LA PREVISORA S.A.', 'AXA COLPATRIA']);
+    (Array.isArray(polizas) ? polizas : []).forEach((p) => {
       if (p.aseguradora?.trim()) set.add(p.aseguradora.trim());
     });
     return Array.from(set).sort();
   }, [polizas]);
 
   const tiposVehiculo = useMemo(() => {
-    const set = new Set<string>();
-    polizas.forEach((p) => {
+    const set = new Set<string>([
+      'MOTO',
+      'CICLOMOTOR',
+      'MOTOCARRO',
+      'AUTOS FAMILIARES',
+      'CAMPEROS Y CAMIONETAS',
+      'VEHICULO PARA 6 O MAS',
+      'CARGA O MIXTO',
+      'OFICIAL',
+      'TAXI',
+      'BUS',
+      'BUSETA',
+      'INTERMUNICIPAL',
+    ]);
+    (Array.isArray(polizas) ? polizas : []).forEach((p) => {
       if (p.tipoVehiculo?.trim()) set.add(p.tipoVehiculo.trim());
     });
     return Array.from(set).sort();
   }, [polizas]);
 
-  const polizasFiltradas = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const hoyStr = new Date().toISOString().slice(0, 10);
+  const handleSearchChange = (value: string) => {
+    setSearch(value);
+    setPage(0);
+  };
 
-    return polizas.filter((p) => {
-      if (q) {
-        const matchesSearch =
-          p.placa?.toLowerCase().includes(q) ||
-          p.propietario?.toLowerCase().includes(q) ||
-          String(p.documento ?? '').includes(q) ||
-          p.aseguradora?.toLowerCase().includes(q) ||
-          p.marcaLinea?.toLowerCase().includes(q);
-        if (!matchesSearch) return false;
-      }
+  const handleAseguradoraChange = (value: string) => {
+    setAseguradoraFilter(value);
+    setPage(0);
+  };
 
-      if (aseguradoraFilter !== 'TODAS' && p.aseguradora?.trim() !== aseguradoraFilter) {
-        return false;
-      }
+  const handleTipoVehiculoChange = (value: string) => {
+    setTipoVehiculoFilter(value);
+    setPage(0);
+  };
 
-      if (tipoVehiculoFilter !== 'TODOS' && p.tipoVehiculo?.trim() !== tipoVehiculoFilter) {
-        return false;
-      }
-
-      if (vigenciaFilter !== 'TODOS') {
-        const estaVigente = Boolean(p.activo) && (!p.hasta || p.hasta >= hoyStr);
-        if (vigenciaFilter === 'VIGENTES' && !estaVigente) return false;
-        if (vigenciaFilter === 'VENCIDOS' && estaVigente) return false;
-      }
-
-      return true;
-    });
-  }, [polizas, search, aseguradoraFilter, tipoVehiculoFilter, vigenciaFilter]);
+  const handleVigenciaChange = (value: EstadoVigenciaFilter) => {
+    setVigenciaFilter(value);
+    setPage(0);
+  };
 
   const handleClearFilters = () => {
     setSearch('');
     setAseguradoraFilter('TODAS');
     setTipoVehiculoFilter('TODOS');
     setVigenciaFilter('TODOS');
+    setPage(0);
   };
 
   const totalPlataforma = useMemo(
-    () => polizas.reduce((acc, p) => acc + Number(p.usoPlataforma || 0), 0),
+    () =>
+      (Array.isArray(polizas) ? polizas : []).reduce(
+        (acc, p) => acc + Number(p.usoPlataforma || 0),
+        0
+      ),
     [polizas]
   );
 
@@ -396,7 +453,6 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row bg-[#F8FAFC] text-[#0F172A] w-full">
-      {/* Barra superior móvil (< md) */}
       <div className="flex md:hidden items-center justify-between gap-2 px-4 py-3 bg-white border-b border-[#E2E8F0] w-full">
         <div className="flex items-center gap-2.5 min-w-0">
           <button
@@ -458,7 +514,6 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
               <p className="text-xs sm:text-sm text-[#64748B] mt-1.5 mb-0">{subtituloHeader}</p>
             </div>
 
-            {/* En móvil: tarjeta de usuario arriba de los botones */}
             <div className="block sm:hidden">{botonUsuarioConfig}</div>
 
             <div className="flex flex-wrap items-center gap-2.5">
@@ -473,7 +528,7 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
                   }
                 >
                   <ShieldCheck size={16} className="shrink-0" />
-                  Pólizas ({polizas.length})
+                  Pólizas ({totalElements})
                 </button>
 
                 <button
@@ -525,7 +580,6 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
                 </button>
               </div>
 
-              {/* En tablet y escritorio: a la derecha de los botones */}
               <div className="hidden sm:block">{botonUsuarioConfig}</div>
             </div>
           </header>
@@ -543,23 +597,27 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
             </div>
           )}
 
-          <KpiCards totalPolizas={polizas.length} totalPlataforma={totalPlataforma} />
+          <KpiCards totalPolizas={totalElements} totalPlataforma={totalPlataforma} />
 
           {activeSection === 'polizas' ? (
             <PolizasTable
-              polizas={polizasFiltradas}
-              totalCount={polizas.length}
+              polizas={polizas}
+              totalCount={totalElements}
+              page={page}
+              pageSize={PAGE_SIZE}
+              totalPages={totalPages}
+              onPageChange={(newPage) => setPage(newPage)}
               loading={loading}
               search={search}
-              onSearchChange={setSearch}
+              onSearchChange={handleSearchChange}
               aseguradoraFilter={aseguradoraFilter}
-              onAseguradoraChange={setAseguradoraFilter}
+              onAseguradoraChange={handleAseguradoraChange}
               aseguradoras={aseguradoras}
               tipoVehiculoFilter={tipoVehiculoFilter}
-              onTipoVehiculoChange={setTipoVehiculoFilter}
+              onTipoVehiculoChange={handleTipoVehiculoChange}
               tiposVehiculo={tiposVehiculo}
               vigenciaFilter={vigenciaFilter}
-              onVigenciaChange={setVigenciaFilter}
+              onVigenciaChange={handleVigenciaChange}
               onClearFilters={handleClearFilters}
               onView={(p) => setViewingPoliza(p)}
               onEdit={(p) => setEditingPoliza(p)}

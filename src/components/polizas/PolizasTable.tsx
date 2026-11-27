@@ -1,12 +1,26 @@
-import { ChevronDown, Eye, Pencil, RotateCcw, Search, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  Pencil,
+  RotateCcw,
+  Search,
+  Trash2,
+} from 'lucide-react';
 import type { Poliza } from '../../types/soat';
 import { formatCOP } from '../../utils/format';
 
-export type EstadoVigenciaFilter = 'TODOS' | 'VIGENTES' | 'VENCIDOS';
+export type EstadoVigenciaFilter = 'TODOS' | 'VIGENTE' | 'POR_VENCER' | 'VENCIDA';
 
 interface PolizasTableProps {
   polizas: Poliza[];
   totalCount: number;
+  page: number; // base 0 (Spring Data Page.number)
+  pageSize: number; // por defecto 10 (Spring Data Page.size)
+  totalPages: number; // Spring Data Page.totalPages
+  onPageChange: (newPage: number) => void;
   loading: boolean;
   search: string;
   onSearchChange: (value: string) => void;
@@ -51,9 +65,31 @@ function esPolizaVigente(poliza: Poliza, hoyStr: string): boolean {
   return Boolean(poliza.activo) && (!poliza.hasta || poliza.hasta >= hoyStr);
 }
 
+function generarPaginasVisibles(currentPage: number, totalPages: number): (number | '...')[] {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, i) => i);
+  }
+  const paginas: (number | '...')[] = [0];
+  const inicio = Math.max(1, currentPage - 1);
+  const fin = Math.min(totalPages - 2, currentPage + 1);
+
+  if (inicio > 1) paginas.push('...');
+  for (let i = inicio; i <= fin; i++) {
+    paginas.push(i);
+  }
+  if (fin < totalPages - 2) paginas.push('...');
+  paginas.push(totalPages - 1);
+
+  return paginas;
+}
+
 export function PolizasTable({
   polizas,
   totalCount,
+  page,
+  pageSize,
+  totalPages,
+  onPageChange,
   loading,
   search,
   onSearchChange,
@@ -70,18 +106,42 @@ export function PolizasTable({
   onEdit,
   onDelete,
 }: PolizasTableProps) {
+  const [busquedaInput, setBusquedaInput] = useState(search);
+
+  useEffect(() => {
+    setBusquedaInput(search);
+  }, [search]);
+
   const hayFiltrosActivos =
     Boolean(search.trim()) ||
+    Boolean(busquedaInput.trim()) ||
     aseguradoraFilter !== 'TODAS' ||
     tipoVehiculoFilter !== 'TODOS' ||
     vigenciaFilter !== 'TODOS';
 
   const hoyStr = new Date().toISOString().slice(0, 10);
 
+  const desdeRegistro = totalCount === 0 ? 0 : page * pageSize + 1;
+  const hastaRegistro = Math.min((page + 1) * pageSize, totalCount);
+  const paginasVisibles = generarPaginasVisibles(page, totalPages);
+
+  const ejecutarBusqueda = () => {
+    if (busquedaInput !== search) {
+      onSearchChange(busquedaInput);
+    } else if (page !== 0) {
+      onPageChange(0);
+    }
+  };
+
+  const handleLimpiarTodo = () => {
+    setBusquedaInput('');
+    onClearFilters();
+  };
+
   return (
     <section className="bg-white border border-[#E2E8F0] rounded-xl overflow-hidden">
       <div className="p-4 border-b border-[#E2E8F0] flex flex-wrap items-center justify-between gap-3">
-        {/* Buscador */}
+        {/* Buscador: ejecuta solo al presionar Enter */}
         <div className="relative flex-1" style={{ minWidth: '250px', maxWidth: '28rem' }}>
           <Search
             size={15}
@@ -96,9 +156,15 @@ export function PolizasTable({
           />
           <input
             type="text"
-            value={search}
-            onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Buscar por placa, propietario, documento o aseguradora..."
+            value={busquedaInput}
+            onChange={(e) => setBusquedaInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                ejecutarBusqueda();
+              }
+            }}
+            placeholder="Buscar por placa, propietario, documento... (Enter)"
             style={{
               ...controlBoxStyle,
               paddingLeft: '2.5rem',
@@ -175,8 +241,9 @@ export function PolizasTable({
               className="rounded-lg border border-[#E2E8F0] bg-white text-xs font-semibold text-[#0F172A] outline-none focus:border-[#0F172A] cursor-pointer"
             >
               <option value="TODOS">Vigencia: Todas</option>
-              <option value="VIGENTES">Vigentes / Activas</option>
-              <option value="VENCIDOS">Vencidas / Inactivas</option>
+              <option value="VIGENTE">Vigentes</option>
+              <option value="POR_VENCER">Por vencer (30 días)</option>
+              <option value="VENCIDA">Vencidas</option>
             </select>
             <ChevronDown
               size={14}
@@ -194,7 +261,7 @@ export function PolizasTable({
           {hayFiltrosActivos && (
             <button
               type="button"
-              onClick={onClearFilters}
+              onClick={handleLimpiarTodo}
               style={controlBoxStyle}
               className="inline-flex items-center gap-1.5 px-3.5 rounded-lg border border-[#E2E8F0] bg-[#F1F5F9] hover:bg-[#E2E8F0] text-xs font-semibold text-[#0F172A] cursor-pointer"
             >
@@ -207,9 +274,18 @@ export function PolizasTable({
 
       <div className="px-4 py-2 bg-[#F8FAFC] border-b border-[#E2E8F0] flex items-center justify-between text-xs text-[#64748B]">
         <span>
-          Mostrando <strong className="text-[#0F172A]">{polizas.length}</strong> de{' '}
-          <strong className="text-[#0F172A]">{totalCount}</strong> pólizas
+          Mostrando{' '}
+          <strong className="text-[#0F172A]">
+            {desdeRegistro}–{hastaRegistro}
+          </strong>{' '}
+          de <strong className="text-[#0F172A]">{totalCount}</strong> pólizas
         </span>
+        {totalPages > 1 && (
+          <span>
+            Página <strong className="text-[#0F172A]">{page + 1}</strong> de{' '}
+            <strong className="text-[#0F172A]">{totalPages}</strong>
+          </span>
+        )}
       </div>
 
       <div className="overflow-x-auto">
@@ -320,6 +396,63 @@ export function PolizasTable({
           </tbody>
         </table>
       </div>
+
+      {/* Paginación desde backend (se muestra cuando hay más de 1 página / > 10 registros) */}
+      {totalPages > 1 && (
+        <div className="px-4 py-3 bg-[#F8FAFC] border-t border-[#E2E8F0] flex flex-wrap items-center justify-between gap-3">
+          <span className="text-xs text-[#64748B]">
+            Mostrando <strong className="text-[#0F172A]">{desdeRegistro}</strong> a{' '}
+            <strong className="text-[#0F172A]">{hastaRegistro}</strong> de{' '}
+            <strong className="text-[#0F172A]">{totalCount}</strong> registros
+          </span>
+
+          <div className="inline-flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => onPageChange(page - 1)}
+              disabled={loading || page <= 0}
+              aria-label="Página anterior"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#E2E8F0] bg-white text-xs font-semibold text-[#0F172A] hover:bg-[#F1F5F9] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            >
+              <ChevronLeft size={14} />
+              Anterior
+            </button>
+
+            {paginasVisibles.map((item, idx) =>
+              item === '...' ? (
+                <span key={`ellipsis-${idx}`} className="px-2 py-1 text-xs text-[#64748B]">
+                  ...
+                </span>
+              ) : (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => onPageChange(item)}
+                  disabled={loading}
+                  className={
+                    item === page
+                      ? 'min-w-[2rem] px-2.5 py-1.5 rounded-lg bg-[#0F172A] text-white text-xs font-semibold cursor-pointer'
+                      : 'min-w-[2rem] px-2.5 py-1.5 rounded-lg border border-[#E2E8F0] bg-white text-xs font-semibold text-[#0F172A] hover:bg-[#F1F5F9] cursor-pointer'
+                  }
+                >
+                  {item + 1}
+                </button>
+              )
+            )}
+
+            <button
+              type="button"
+              onClick={() => onPageChange(page + 1)}
+              disabled={loading || page >= totalPages - 1}
+              aria-label="Página siguiente"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#E2E8F0] bg-white text-xs font-semibold text-[#0F172A] hover:bg-[#F1F5F9] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            >
+              Siguiente
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

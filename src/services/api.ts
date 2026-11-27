@@ -9,6 +9,29 @@ import type {
   UsuarioSistema,
 } from '../types/soat';
 
+export interface PageResponse<T> {
+  content: T[];
+  number: number; // página actual (0-indexed en Spring Data)
+  size: number; // tamaño de página (10 por defecto)
+  totalElements: number;
+  totalPages: number;
+  first: boolean;
+  last: boolean;
+  empty: boolean;
+}
+
+export interface ListarPolizasParams {
+  page?: number;
+  size?: number;
+  q?: string;
+  aseguradora?: string;
+  tipoVehiculo?: string;
+  vigencia?: 'TODOS' | 'VIGENTE' | 'POR_VENCER' | 'VENCIDA';
+  soloActivas?: boolean;
+  sortBy?: string;
+  sortDir?: 'asc' | 'desc';
+}
+
 const API_URL = import.meta.env.VITE_API_URL || 'https://redcell-soat-api.onrender.com';
 
 function getHeaders(isJson = true): HeadersInit {
@@ -88,12 +111,44 @@ export const api = {
   },
 
   // Pólizas
-  listarPolizas: async (): Promise<Poliza[]> => {
-    const res = await fetch(`${API_URL}/api/polizas`, { headers: getHeaders(false) });
-    return handleResponse<Poliza[]>(res);
+  listarPolizasPaginadas: async (
+    params: ListarPolizasParams = {}
+  ): Promise<PageResponse<Poliza>> => {
+    const query = new URLSearchParams();
+    query.set('page', String(params.page ?? 0));
+    query.set('size', String(params.size ?? 10));
+
+    if (params.q && params.q.trim()) query.set('q', params.q.trim());
+    if (params.aseguradora && params.aseguradora !== 'TODAS') {
+      query.set('aseguradora', params.aseguradora);
+    }
+    if (params.tipoVehiculo && params.tipoVehiculo !== 'TODOS') {
+      query.set('tipoVehiculo', params.tipoVehiculo);
+    }
+    if (params.vigencia && params.vigencia !== 'TODOS') {
+      query.set('vigencia', params.vigencia);
+    }
+    if (params.soloActivas !== undefined) {
+      query.set('soloActivas', String(params.soloActivas));
+    }
+    if (params.sortBy) query.set('sortBy', params.sortBy);
+    if (params.sortDir) query.set('sortDir', params.sortDir);
+
+    const res = await fetch(`${API_URL}/api/polizas?${query.toString()}`, {
+      headers: getHeaders(false),
+    });
+    return handleResponse<PageResponse<Poliza>>(res);
   },
 
-subirPdf: async (file: File): Promise<{ message: string }> => {
+  listarPolizas: async (): Promise<Poliza[]> => {
+    const res = await fetch(`${API_URL}/api/polizas?page=0&size=10`, {
+      headers: getHeaders(false),
+    });
+    const pageData = await handleResponse<PageResponse<Poliza>>(res);
+    return pageData.content;
+  },
+
+  subirPdf: async (file: File): Promise<{ message: string }> => {
     const formData = new FormData();
     formData.append('file', file);
     const res = await fetch(`${API_URL}/api/polizas/upload`, {
@@ -212,5 +267,5 @@ subirPdf: async (file: File): Promise<{ message: string }> => {
       }
     );
     return handleResponse<UsuarioSistema>(res);
-  }
+  },
 };
