@@ -77,7 +77,9 @@ export function SubirPdfModal({ isOpen, onClose, onUpload }: SubirPdfModalProps)
           <label className="flex flex-col items-center justify-center border-2 border-dashed border-[#E2E8F0] rounded-xl p-6 cursor-pointer hover:border-[#DC2626]">
             <FileUp size={28} className="text-[#DC2626] mb-2" />
             <span className="text-sm font-medium text-center">
-              {pdfFile ? pdfFile.name : 'Selecciona el PDF de Previsora o AXA Colpatria'}
+              {pdfFile
+                ? pdfFile.name
+                : 'Selecciona el PDF de Previsora, AXA Colpatria o Seguros Mundial'}
             </span>
             <span className="text-[11px] text-[#64748B] mt-1">Formato PDF · Máximo 10 MB</span>
             <input

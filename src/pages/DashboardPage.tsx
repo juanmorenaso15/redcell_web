@@ -45,9 +45,93 @@ interface DashboardPageProps {
 }
 
 const PAGE_SIZE = 10;
+const ZONA_COLOMBIA = 'America/Bogota';
+
+function obtenerClaveMesActual(fecha = new Date()): string {
+  const partes = new Intl.DateTimeFormat('en-CA', {
+    timeZone: ZONA_COLOMBIA,
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(fecha);
+
+  const anio = partes.find((p) => p.type === 'year')?.value ?? String(fecha.getFullYear());
+  const mes = partes.find((p) => p.type === 'month')?.value ?? String(fecha.getMonth() + 1).padStart(2, '0');
+  return `${anio}-${mes}`;
+}
+
+function obtenerEtiquetaMesActual(fecha = new Date()): string {
+  const texto = new Intl.DateTimeFormat('es-CO', {
+    timeZone: ZONA_COLOMBIA,
+    month: 'long',
+    year: 'numeric',
+  }).format(fecha);
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
+
+function perteneceAlMesActual(poliza: Poliza, claveMesActual: string): boolean {
+  const registro = poliza as unknown as Record<string, unknown>;
+  const camposFecha = [
+    registro.fechaRegistro,
+    registro.fechaCreacion,
+    registro.creadoEn,
+    registro.createdAt,
+    registro.fechaExpedicion,
+    poliza.desde,
+  ];
+
+  for (const valor of camposFecha) {
+    if (typeof valor === 'string' && valor.trim().length >= 7) {
+      const clave = valor.trim().slice(0, 7);
+      if (/^\d{4}-\d{2}$/.test(clave)) {
+        return clave === claveMesActual;
+      }
+    }
+  }
+
+  return false;
+}
+
+function resolverPolizaParaAlerta(
+  alerta: AlertaRecordatorio,
+  catalogoPolizas: Poliza[]
+): Poliza {
+  const porId = catalogoPolizas.find((p) => p.id === alerta.polizaId);
+  if (porId) return porId;
+
+  const placaNormalizada = alerta.placa?.trim().toUpperCase();
+  if (placaNormalizada) {
+    const porPlaca = catalogoPolizas.find(
+      (p) => p.placa?.trim().toUpperCase() === placaNormalizada
+    );
+    if (porPlaca) return porPlaca;
+  }
+
+  return {
+    id: alerta.polizaId,
+    tipoVehiculo: '',
+    placa: alerta.placa,
+    propietario: alerta.propietario ?? '',
+    tipoDocumento: '',
+    documento: 0,
+    desde: '',
+    hasta: alerta.fechaVencimiento,
+    marcaLinea: '',
+    cilindraje: 0,
+    aseguradora: '',
+    edadVehiculo: 0,
+    capacidadToneladas: 0,
+    precioSoat: 0,
+    usoPlataforma: 0,
+    totalPagar: 0,
+    activo: true,
+    telefono: alerta.telefono ?? null,
+    email: alerta.email ?? null,
+  };
+}
 
 export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
   const [polizas, setPolizas] = useState<Poliza[]>([]);
+  const [todasPolizasActivas, setTodasPolizasActivas] = useState<Poliza[]>([]);
   const [page, setPage] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [totalElements, setTotalElements] = useState(0);
@@ -100,21 +184,29 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
           tipoVehiculo: tipoVehiculoFilter,
           vigencia: vigenciaFilter,
           soloActivas: true,
-          sortBy: 'id',
-          sortDir: 'desc',
+          sortBy: 'hasta',
+          sortDir: 'asc',
         });
 
         if (Array.isArray(pageData)) {
-          setPolizas(pageData);
+          const ordenadas = [...pageData].sort((a, b) =>
+            String(a.hasta ?? '9999-12-31').localeCompare(String(b.hasta ?? '9999-12-31'))
+          );
+          setPolizas(ordenadas);
           setPage(0);
-          setTotalPages(pageData.length > 0 ? 1 : 0);
-          setTotalElements(pageData.length);
+          setTotalPages(ordenadas.length > 0 ? 1 : 0);
+          setTotalElements(ordenadas.length);
         } else {
           const content = Array.isArray(pageData?.content) ? pageData.content : [];
-          setPolizas(content);
+          const ordenadas = [...content].sort((a, b) =>
+            String(a.hasta ?? '9999-12-31').localeCompare(String(b.hasta ?? '9999-12-31'))
+          );
+          setPolizas(ordenadas);
           setPage(typeof pageData?.number === 'number' ? pageData.number : 0);
           setTotalPages(typeof pageData?.totalPages === 'number' ? pageData.totalPages : 0);
-          setTotalElements(typeof pageData?.totalElements === 'number' ? pageData.totalElements : content.length);
+          setTotalElements(
+            typeof pageData?.totalElements === 'number' ? pageData.totalElements : ordenadas.length
+          );
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Error cargando pólizas';
@@ -133,11 +225,13 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
   const cargarDatosComplementarios = useCallback(async () => {
     setLoadingPerfil(true);
     try {
-      const [listaAlertas, listaTarifas, perfilUsuario] = await Promise.all([
+      const [listaActivas, listaAlertas, listaTarifas, perfilUsuario] = await Promise.all([
+        api.listarPolizas().catch(() => []),
         api.obtenerAlertas().catch(() => []),
         api.listarTarifas().catch(() => []),
         api.obtenerPerfil().catch(() => null),
       ]);
+      setTodasPolizasActivas(Array.isArray(listaActivas) ? listaActivas : []);
       setAlertas(Array.isArray(listaAlertas) ? listaAlertas : []);
       setTarifas(Array.isArray(listaTarifas) ? listaTarifas : []);
       if (perfilUsuario) {
@@ -172,6 +266,11 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
         ? (Array.isArray(alertas) ? alertas : []).filter((a) => !a.enviadoWhatsapp)
         : (Array.isArray(alertas) ? alertas : []),
     [alertas, soloPendientesWhatsapp]
+  );
+
+  const catalogoPolizas = useMemo(
+    () => (todasPolizasActivas.length > 0 ? todasPolizasActivas : polizas),
+    [todasPolizasActivas, polizas]
   );
 
   const handleUploadPdf = async (file: File) => {
@@ -292,10 +391,9 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
   };
 
   const handleApplyTarifaToPolizas = async (valor: number, soloSinTarifa: boolean) => {
-    const lista = Array.isArray(polizas) ? polizas : [];
     const objetivos = soloSinTarifa
-      ? lista.filter((p) => Number(p.usoPlataforma || 0) === 0)
-      : lista;
+      ? catalogoPolizas.filter((p) => Number(p.usoPlataforma || 0) === 0)
+      : catalogoPolizas;
 
     if (objetivos.length === 0) {
       await alertasSwal.advertencia(
@@ -335,12 +433,12 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
   };
 
   const aseguradoras = useMemo(() => {
-    const set = new Set<string>(['LA PREVISORA S.A.', 'AXA COLPATRIA']);
-    (Array.isArray(polizas) ? polizas : []).forEach((p) => {
+    const set = new Set<string>(['LA PREVISORA S.A.', 'AXA COLPATRIA', 'SEGUROS MUNDIAL']);
+    catalogoPolizas.forEach((p) => {
       if (p.aseguradora?.trim()) set.add(p.aseguradora.trim());
     });
     return Array.from(set).sort();
-  }, [polizas]);
+  }, [catalogoPolizas]);
 
   const tiposVehiculo = useMemo(() => {
     const set = new Set<string>([
@@ -357,11 +455,11 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
       'BUSETA',
       'INTERMUNICIPAL',
     ]);
-    (Array.isArray(polizas) ? polizas : []).forEach((p) => {
+    catalogoPolizas.forEach((p) => {
       if (p.tipoVehiculo?.trim()) set.add(p.tipoVehiculo.trim());
     });
     return Array.from(set).sort();
-  }, [polizas]);
+  }, [catalogoPolizas]);
 
   const handleSearchChange = (value: string) => {
     setSearch(value);
@@ -391,14 +489,14 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
     setPage(0);
   };
 
-  const totalPlataforma = useMemo(
-    () =>
-      (Array.isArray(polizas) ? polizas : []).reduce(
-        (acc, p) => acc + Number(p.usoPlataforma || 0),
-        0
-      ),
-    [polizas]
-  );
+  const claveMesActual = obtenerClaveMesActual();
+  const etiquetaMesActual = obtenerEtiquetaMesActual();
+
+  const totalPlataformaMes = useMemo(() => {
+    return catalogoPolizas
+      .filter((p) => perteneceAlMesActual(p, claveMesActual))
+      .reduce((acc, p) => acc + Number(p.usoPlataforma || 0), 0);
+  }, [catalogoPolizas, claveMesActual]);
 
   const tituloHeader =
     activeSection === 'configuracion'
@@ -597,7 +695,11 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
             </div>
           )}
 
-          <KpiCards totalPolizas={totalElements} totalPlataforma={totalPlataforma} />
+          <KpiCards
+            totalPolizas={totalElements}
+            totalPlataformaMes={totalPlataformaMes}
+            etiquetaMes={etiquetaMesActual}
+          />
 
           {activeSection === 'polizas' ? (
             <PolizasTable
@@ -626,7 +728,7 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
           ) : activeSection === 'tarifas' ? (
             <UsoPlataformaSection
               tarifas={tarifas}
-              polizas={polizas}
+              polizas={catalogoPolizas}
               loading={loading}
               onCreateTarifa={handleCreateTarifa}
               onUpdateTarifa={handleUpdateTarifa}
@@ -666,11 +768,15 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
                 <div className="alertas-grid">
                   {alertasVisibles.map((alerta) => {
                     const key = `${alerta.polizaId}-${alerta.tipoRecordatorio}`;
-                    const polizaAsociada = polizas.find((p) => p.id === alerta.polizaId);
-                    const mensajeAlertaEmojis = polizaAsociada
-                      ? construirMensajeWhatsappConEmojis(polizaAsociada, alerta.etiqueta)
-                      : alerta.mensajeAlerta;
-                    const telefonoWa = alerta.telefono ?? polizaAsociada?.telefono;
+                    const polizaResuelta = resolverPolizaParaAlerta(alerta, catalogoPolizas);
+                    const tienePolizaEnCatalogo = catalogoPolizas.some(
+                      (p) => p.id === polizaResuelta.id
+                    );
+                    const mensajeAlertaEmojis = construirMensajeWhatsappConEmojis(
+                      polizaResuelta,
+                      alerta.etiqueta
+                    );
+                    const telefonoWa = polizaResuelta.telefono || alerta.telefono;
                     const waLink = construirEnlaceWhatsappDirecto(telefonoWa, mensajeAlertaEmojis);
 
                     return (
@@ -684,10 +790,10 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
                               <span className="font-bold text-sm text-[#0F172A] font-headline">
                                 {alerta.placa}
                               </span>
-                              {polizaAsociada && (
+                              {tienePolizaEnCatalogo && (
                                 <button
                                   type="button"
-                                  onClick={() => setViewingPoliza(polizaAsociada)}
+                                  onClick={() => setViewingPoliza(polizaResuelta)}
                                   title="Ver detalle del SOAT"
                                   aria-label={`Ver detalle del SOAT de la placa ${alerta.placa}`}
                                   className="inline-flex items-center justify-center text-[#64748B] hover:text-[#0F172A] bg-white border border-[#E2E8F0] rounded p-1 cursor-pointer"
@@ -703,7 +809,7 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
                           </div>
 
                           <div className="text-xs font-semibold text-[#0F172A] truncate">
-                            {alerta.propietario || polizaAsociada?.propietario || 'Cliente'}
+                            {polizaResuelta.propietario || alerta.propietario || 'Cliente'}
                           </div>
 
                           <div className="text-[11px] text-[#64748B] flex items-center justify-between gap-2">
@@ -737,8 +843,39 @@ export function DashboardPage({ onUnauthorized }: DashboardPageProps) {
                               rel="noreferrer"
                               onClick={async (e) => {
                                 e.preventDefault();
-                                await copiarAlPortapapeles(mensajeAlertaEmojis);
-                                window.open(waLink, '_blank', 'noopener,noreferrer');
+                                let mensajeFinal = mensajeAlertaEmojis;
+                                let linkFinal = waLink;
+
+                                if (!tienePolizaEnCatalogo && alerta.placa) {
+                                  const resBusqueda = await api
+                                    .listarPolizasPaginadas({
+                                      page: 0,
+                                      size: 1,
+                                      q: alerta.placa,
+                                      soloActivas: true,
+                                    })
+                                    .catch(() => null);
+                                  const polizaFresca = resBusqueda?.content?.find(
+                                    (p) =>
+                                      p.id === alerta.polizaId ||
+                                      p.placa?.trim().toUpperCase() ===
+                                        alerta.placa.trim().toUpperCase()
+                                  );
+                                  if (polizaFresca) {
+                                    mensajeFinal = construirMensajeWhatsappConEmojis(
+                                      polizaFresca,
+                                      alerta.etiqueta
+                                    );
+                                    linkFinal =
+                                      construirEnlaceWhatsappDirecto(
+                                        polizaFresca.telefono || telefonoWa,
+                                        mensajeFinal
+                                      ) ?? waLink;
+                                  }
+                                }
+
+                                await copiarAlPortapapeles(mensajeFinal);
+                                window.open(linkFinal, '_blank', 'noopener,noreferrer');
                               }}
                               className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-semibold flex-1 whitespace-nowrap"
                               style={{ textDecoration: 'none' }}
